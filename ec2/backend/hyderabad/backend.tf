@@ -1,5 +1,5 @@
-bucket         = "mf-commonsprod-hyd-terraform-state"
-key            = "EPCORE-PROD-APP-terraform.tfstate"
+bucket         = ""
+key            = ""
 region         = "ap-south-2"
 encrypt        = true
 dynamodb_table = "terraform-lock"
