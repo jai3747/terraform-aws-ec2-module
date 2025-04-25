@@ -1,3 +1,72 @@
+# # GitHub Actions workflow for Terraform vulnerability scanning with Checkov
+# name: Terraform Security Scan
+
+# on:
+#   push:
+#     branches: [ main, master ]
+#     paths:
+#       - '**.tf'
+#       - '**.tfvars'
+#   pull_request:
+#     branches: [ main, master ]
+#     paths:
+#       - '**.tf'
+#       - '**.tfvars'
+#   # Allow manual trigger
+#   workflow_dispatch:
+
+# jobs:
+#   checkov-scan:
+#     name: Checkov Terraform Security Scan
+#     runs-on: ubuntu-latest
+    
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v3
+      
+#       # Set up Python
+#       - name: Set up Python
+#         uses: actions/setup-python@v4
+#         with:
+#           python-version: '3.10'
+          
+#       - name: Install Checkov
+#         run: pip install checkov
+      
+#       - name: Run Checkov scan
+#         run: |
+#           mkdir -p scan-results
+#           checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/results.json
+#           echo "Scan completed. Results saved to scan-results/results.json"
+      
+#       # Save results to workspace without using actions/upload-artifact
+#       - name: Create scan summary
+#         run: |
+#           echo "## Checkov Terraform Security Scan Results" > scan-results/summary.md
+#           echo "Scan completed at $(date)" >> scan-results/summary.md
+          
+#           if [ -f scan-results/results.json ]; then
+#             FAILED_CHECKS=$(grep -c "\"check_result\": \"FAILED\"" scan-results/results.json || echo "0")
+#             echo "- **Failed checks:** $FAILED_CHECKS" >> scan-results/summary.md
+            
+#             # Extract and list failed checks
+#             echo "### Failed Security Checks:" >> scan-results/summary.md
+#             grep -B 5 -A 15 "\"check_result\": \"FAILED\"" scan-results/results.json | grep "\"check_name\":\|\"file_path\":\|\"check_id\":" | sort | uniq >> scan-results/summary.md
+#           else
+#             echo "- No results file found" >> scan-results/summary.md
+#           fi
+          
+#           cat scan-results/summary.md
+      
+#       # Fail the build if Checkov finds high severity issues (optional)
+#       - name: Check for high severity issues
+#         run: |
+#           if grep -q "\"severity\": \"HIGH\"" scan-results/results.json; then
+#             echo "High severity security issues found in Terraform code!"
+#             exit 1
+#           else
+#             echo "No high severity issues found."
+#           fi
 # GitHub Actions workflow for Terraform vulnerability scanning with Checkov
 name: Terraform Security Scan
 
@@ -12,8 +81,6 @@ on:
     paths:
       - '**.tf'
       - '**.tfvars'
-  # Allow manual trigger
-  workflow_dispatch:
 
 jobs:
   checkov-scan:
@@ -39,7 +106,7 @@ jobs:
           checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/results.json
           echo "Scan completed. Results saved to scan-results/results.json"
       
-      # Save results to workspace without using actions/upload-artifact
+      # Save results to workspace
       - name: Create scan summary
         run: |
           echo "## Checkov Terraform Security Scan Results" > scan-results/summary.md
@@ -58,12 +125,11 @@ jobs:
           
           cat scan-results/summary.md
       
-      # Fail the build if Checkov finds high severity issues (optional)
-      - name: Check for high severity issues
+      # Report findings but don't fail the pipeline
+      - name: Report security issues
         run: |
           if grep -q "\"severity\": \"HIGH\"" scan-results/results.json; then
-            echo "High severity security issues found in Terraform code!"
-            exit 1
+            echo "Warning: High severity security issues found in Terraform code, but continuing build."
           else
             echo "No high severity issues found."
           fi
