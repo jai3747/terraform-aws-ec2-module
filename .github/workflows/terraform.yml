@@ -14,34 +14,36 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
+      # Step 1: Checkout the code
       - name: Checkout code
         uses: actions/checkout@v3
         with:
           fetch-depth: 0  # Fetch all history for proper scanning
       
-      # Debug: List all terraform files in the repository
+      # Step 2: List all Terraform files for debugging
       - name: List Terraform files
         run: |
           echo "Looking for all Terraform files in the repository:"
           find . -type f -name "*.tf" -o -name "*.tfvars" | sort
           echo "---"
           
-      # Set up Python
+      # Step 3: Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
           
+      # Step 4: Install Checkov
       - name: Install Checkov
         run: pip install checkov
       
-      # Remove any existing results directories to prevent issues
+      # Step 5: Clean up any previous scan results
       - name: Clean up any previous scan results
         run: |
           rm -rf scan-results
           mkdir -p scan-results
       
-      # Run Checkov scan against the entire repository for Terraform only
+      # Step 6: Run Checkov scan for Terraform
       - name: Run Checkov scan for Terraform
         id: run-terraform-scan
         continue-on-error: true  # This ensures the workflow doesn't fail when issues are found
@@ -63,7 +65,7 @@ jobs:
             echo "No Terraform files found or scan failed." > ./scan-results/terraform-results.txt
           fi
       
-      # Run a full scan with all frameworks
+      # Step 7: Run comprehensive scan for all IaC frameworks
       - name: Run comprehensive scan (all IaC)
         id: run-comprehensive-scan
         continue-on-error: true  # This ensures the workflow doesn't fail when issues are found
@@ -85,7 +87,7 @@ jobs:
             echo "No IaC files found or scan failed." > ./scan-results/full-results.txt
           fi
       
-      # Create a detailed report
+      # Step 8: Create a detailed vulnerability report
       - name: Create vulnerability report
         run: |
           echo "## Checkov Security Scan Results" > ./scan-results/vulnerability-report.md
@@ -152,15 +154,15 @@ jobs:
           
           cat ./scan-results/vulnerability-report.md
       
-      # Store scan results as artifacts - use v2 instead of v3
+      # Step 9: Upload scan results as artifacts
       - name: Upload scan results
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: security-scan-results
           path: scan-results/
           retention-days: 14
       
-      # Report findings but don't fail the pipeline
+      # Step 10: Report findings but don't fail the pipeline
       - name: Report security issues summary
         run: |
           if [ "${{ steps.run-terraform-scan.outputs.tf_scan_status }}" != "0" ]; then
