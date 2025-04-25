@@ -152,9 +152,9 @@ jobs:
           
           cat ./scan-results/vulnerability-report.md
       
-      # Store scan results as artifacts
+      # Store scan results as artifacts - use v2 instead of v3
       - name: Upload scan results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: security-scan-results
           path: scan-results/
@@ -170,3 +170,5 @@ jobs:
           if [ "${{ steps.run-comprehensive-scan.outputs.full_scan_status }}" != "0" ]; then
             echo "::warning::Security issues found in IaC files! See scan results for details."
           fi
+          
+          echo "All scan results have been uploaded as artifacts."
