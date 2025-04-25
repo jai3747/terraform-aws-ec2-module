@@ -1,4 +1,4 @@
-# GitHub Actions workflow for Terraform vulnerability scanning with Checkov
+# Enhanced GitHub Actions workflow for Terraform vulnerability scanning with Checkov
 name: Terraform Security Scan
 
 on:
@@ -20,141 +20,293 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for proper scanning
       
-      # Step 2: List all Terraform files for debugging
-      - name: List Terraform files
-        run: |
-          echo "Looking for all Terraform files in the repository:"
-          find . -type f -name "*.tf" -o -name "*.tfvars" | sort
-          echo "---"
-          
-      # Step 3: Set up Python environment
+      # Step 2: Set up Python environment
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           
-      # Step 4: Install Checkov
-      - name: Install Checkov
-        run: pip install checkov
-      
-      # Step 5: Clean up any previous scan results
-      - name: Clean up any previous scan results
+      # Step 3: Install Checkov and additional tools
+      - name: Install security scanning tools
         run: |
-          rm -rf scan-results
-          mkdir -p scan-results
-      
-      # Step 6: Run Checkov scan for Terraform
-      - name: Run Checkov scan for Terraform
-        id: run-terraform-scan
-        continue-on-error: true  # This ensures the workflow doesn't fail when issues are found
-        run: |
-          # Run Checkov directly with output to a specific file
-          checkov --directory . --framework terraform --output cli --output json --output-file-path scan-results/terraform-results
+          pip install checkov
+          pip install jq pyyaml tabulate
           
-          # Store exit code to determine if vulnerabilities were found
+      # Step 4: Create results directory
+      - name: Prepare results directory
+        run: |
+          mkdir -p scan-results/terraform
+          mkdir -p scan-results/full
+          mkdir -p scan-results/reports
+      
+      # Step 5: Find all Terraform files and create a file index
+      - name: Index Terraform files
+        run: |
+          echo "# Terraform Files Index" > scan-results/terraform-files-index.md
+          echo "Files found at $(date)" >> scan-results/terraform-files-index.md
+          echo "" >> scan-results/terraform-files-index.md
+          echo "| File Path | Lines | Last Modified |" >> scan-results/terraform-files-index.md
+          echo "|-----------|-------|---------------|" >> scan-results/terraform-files-index.md
+          
+          # Find all terraform files and add to index with line count and last modified date
+          find . -type f -name "*.tf" -o -name "*.tfvars" | sort | while read -r file; do
+            LINES=$(wc -l < "$file")
+            MODIFIED=$(git log -1 --format="%ad" --date=short -- "$file" 2>/dev/null || echo "N/A")
+            echo "| \`$file\` | $LINES | $MODIFIED |" >> scan-results/terraform-files-index.md
+          done
+          
+          # Count total Terraform files
+          TF_FILES=$(find . -type f -name "*.tf" -o -name "*.tfvars" | wc -l)
+          echo "" >> scan-results/terraform-files-index.md
+          echo "**Total Terraform Files:** $TF_FILES" >> scan-results/terraform-files-index.md
+          
+          cat scan-results/terraform-files-index.md
+      
+      # Step 6: Run Checkov scan for Terraform with detailed output
+      - name: Run Terraform security scan
+        id: terraform-scan
+        continue-on-error: true
+        run: |
+          # Run Checkov with multiple output formats
+          checkov --directory . \
+            --framework terraform \
+            --output cli \
+            --output json \
+            --output-file-path scan-results/terraform/results \
+            --summary-position bottom
+          
           echo "tf_scan_status=$?" >> $GITHUB_OUTPUT
           
-          # Ensure the file exists (checkov outputs .json extension automatically)
-          if [ -f ./scan-results/terraform-results.json ]; then
-            echo "Scan completed and JSON results saved"
-            # Save a CLI version for human-readable output
-            checkov --directory . --framework terraform --output cli > ./scan-results/terraform-results.txt || true
+          if [ -f ./scan-results/terraform/results.json ]; then
+            echo "✓ Terraform scan complete - results saved"
           else
-            echo "No terraform files found or scan produced no results"
-            echo "{\"results\": {\"failed_checks\": []}}" > ./scan-results/terraform-results.json
-            echo "No Terraform files found or scan failed." > ./scan-results/terraform-results.txt
+            echo "No Terraform files found or scan failed to produce results"
+            echo "{\"results\": {\"failed_checks\": []}}" > ./scan-results/terraform/results.json
           fi
       
       # Step 7: Run comprehensive scan for all IaC frameworks
-      - name: Run comprehensive scan (all IaC)
-        id: run-comprehensive-scan
-        continue-on-error: true  # This ensures the workflow doesn't fail when issues are found
+      - name: Run comprehensive IaC scan
+        id: full-scan
+        continue-on-error: true
         run: |
-          # Run scan with all frameworks
-          checkov --directory . --output cli --output json --output-file-path scan-results/full-results
+          # Run full scan with all supported frameworks
+          checkov --directory . \
+            --output cli \
+            --output json \
+            --output-file-path scan-results/full/results \
+            --summary-position bottom
           
-          # Store exit code to determine if vulnerabilities were found
           echo "full_scan_status=$?" >> $GITHUB_OUTPUT
           
-          # Ensure the file exists
-          if [ -f ./scan-results/full-results.json ]; then
-            echo "Comprehensive scan completed and JSON results saved"
-            # Save a CLI version for human-readable output
-            checkov --directory . --output cli > ./scan-results/full-results.txt || true
+          if [ -f ./scan-results/full/results.json ]; then
+            echo "✓ Comprehensive scan complete - results saved"
           else
-            echo "Comprehensive scan produced no results"
-            echo "{\"results\": {\"failed_checks\": []}}" > ./scan-results/full-results.json
-            echo "No IaC files found or scan failed." > ./scan-results/full-results.txt
+            echo "Scan failed to produce results"
+            echo "{\"results\": {\"failed_checks\": []}}" > ./scan-results/full/results.json
           fi
       
-      # Step 8: Create a detailed vulnerability report
-      - name: Create vulnerability report
+      # Step 8: Generate enhanced vulnerability report with file-specific issues
+      - name: Generate enhanced vulnerability report
         run: |
-          echo "## Checkov Security Scan Results" > ./scan-results/vulnerability-report.md
-          echo "Scan completed at $(date)" >> ./scan-results/vulnerability-report.md
-          echo "" >> ./scan-results/vulnerability-report.md
+          # Create main report file
+          cat > scan-results/reports/security-report.md << 'EOL'
+          # Infrastructure Security Scan Report
           
-          echo "### Terraform Scan Summary" >> ./scan-results/vulnerability-report.md
-          if [ -f ./scan-results/terraform-results.txt ]; then
-            # Extract passed/failed counts
-            PASSED_COUNT=$(grep -o "Passed checks: [0-9]*" ./scan-results/terraform-results.txt | awk '{print $3}')
-            FAILED_COUNT=$(grep -o "Failed checks: [0-9]*" ./scan-results/terraform-results.txt | awk '{print $3}')
-            SKIPPED_COUNT=$(grep -o "Skipped checks: [0-9]*" ./scan-results/terraform-results.txt | awk '{print $3}')
+          ## Overview
+          
+          This report contains security findings from scanning infrastructure-as-code files in this repository.
+          Scan completed at: $(date)
+          
+          ## Executive Summary
+          EOL
+          
+          # Process Terraform scan results for summary stats
+          if [ -f ./scan-results/terraform/results.json ]; then
+            # Extract statistics using grep on the CLI output (more reliable than JSON parsing in bash)
+            PASSED=$(grep -o "Passed checks: [0-9]*" ./scan-results/terraform/results.cli 2>/dev/null | awk '{print $3}')
+            FAILED=$(grep -o "Failed checks: [0-9]*" ./scan-results/terraform/results.cli 2>/dev/null | awk '{print $3}')
+            SKIPPED=$(grep -o "Skipped checks: [0-9]*" ./scan-results/terraform/results.cli 2>/dev/null | awk '{print $3}')
             
-            echo "* **Passed checks:** ${PASSED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "* **Failed checks:** ${FAILED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "* **Skipped checks:** ${SKIPPED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "" >> ./scan-results/vulnerability-report.md
+            # Set default values if grep finds nothing
+            PASSED=${PASSED:-0}
+            FAILED=${FAILED:-0}
+            SKIPPED=${SKIPPED:-0}
             
-            # Extract and list all failed checks with file paths
-            if [ "${FAILED_COUNT:-0}" -gt 0 ]; then
-              echo "### Failed Terraform Checks" >> ./scan-results/vulnerability-report.md
-              echo "" >> ./scan-results/vulnerability-report.md
-              echo "| Check ID | Resource | File Path | Description |" >> ./scan-results/vulnerability-report.md
-              echo "|----------|----------|-----------|-------------|" >> ./scan-results/vulnerability-report.md
+            # Add executive summary to report
+            cat >> scan-results/reports/security-report.md << EOL
+          
+          ### Terraform Security Posture
+          
+          | Metric | Count |
+          |--------|-------|
+          | ✅ Passed checks | ${PASSED} |
+          | ❌ Failed checks | ${FAILED} |
+          | ⚠️ Skipped checks | ${SKIPPED} |
+          
+          EOL
+            
+            # Add severity breakdown if there are failures
+            if [ "$FAILED" -gt 0 ]; then
+              # Count issues by severity from the JSON file with simple tools
+              HIGH=$(grep -o "\"severity\": \"HIGH\"" ./scan-results/terraform/results.json | wc -l)
+              MEDIUM=$(grep -o "\"severity\": \"MEDIUM\"" ./scan-results/terraform/results.json | wc -l)
+              LOW=$(grep -o "\"severity\": \"LOW\"" ./scan-results/terraform/results.json | wc -l)
               
-              # Process the results to extract file paths and check details
-              grep -A 5 "FAILED for resource" ./scan-results/terraform-results.txt | while read -r line; do
-                if [[ $line == *"Check:"* ]]; then
-                  CHECK_ID=$(echo "$line" | sed -n 's/.*Check: \([^:]*\).*/\1/p')
-                  CHECK_DESC=$(echo "$line" | sed -n 's/.*Check: [^:]*: "\(.*\)"/\1/p')
-                elif [[ $line == *"FAILED for resource:"* ]]; then
-                  RESOURCE=$(echo "$line" | sed -n 's/.*FAILED for resource: \(.*\)/\1/p')
-                elif [[ $line == *"File:"* ]]; then
-                  FILE_PATH=$(echo "$line" | sed -n 's/.*File: \(.*\)/\1/p')
-                  echo "| $CHECK_ID | $RESOURCE | $FILE_PATH | $CHECK_DESC |" >> ./scan-results/vulnerability-report.md
-                fi
-              done
-              echo "" >> ./scan-results/vulnerability-report.md
+              cat >> scan-results/reports/security-report.md << EOL
+          ### Security Issues by Severity
+          
+          | Severity | Count |
+          |----------|-------|
+          | 🔴 High | ${HIGH} |
+          | 🟠 Medium | ${MEDIUM} |
+          | 🟡 Low | ${LOW} |
+          
+          EOL
             fi
           else
-            echo "No Terraform scan results available." >> ./scan-results/vulnerability-report.md
+            echo "No Terraform scan results available" >> scan-results/reports/security-report.md
           fi
           
-          # Add full scan results
-          echo "### Comprehensive IaC Scan Summary" >> ./scan-results/vulnerability-report.md
-          if [ -f ./scan-results/full-results.txt ]; then
-            # Extract passed/failed counts from full scan
-            FULL_PASSED_COUNT=$(grep -o "Passed checks: [0-9]*" ./scan-results/full-results.txt | awk '{print $3}')
-            FULL_FAILED_COUNT=$(grep -o "Failed checks: [0-9]*" ./scan-results/full-results.txt | awk '{print $3}')
-            FULL_SKIPPED_COUNT=$(grep -o "Skipped checks: [0-9]*" ./scan-results/full-results.txt | awk '{print $3}')
+          # Create file-specific security issue report section
+          cat >> scan-results/reports/security-report.md << 'EOL'
+          
+          ## File-Specific Security Issues
+          
+          The following files contain security issues that need to be addressed:
+          
+          EOL
+          
+          # Extract issues by file from the CLI output
+          if [ -f ./scan-results/terraform/results.cli ]; then
+            # Use awk to parse the CLI output and group issues by file
+            awk '
+            /Check: / { check=$0 }
+            /FAILED for resource:/ { resource=$0 }
+            /File:/ { 
+              file=$0; 
+              sub(/.*File: /, "", file);
+              files[file] = files[file] ? files[file] "\n" check "\n" resource : check "\n" resource;
+              count[file]++;
+            }
+            END {
+              for (f in files) {
+                print "### " f " (" count[f] " issues)\n";
+                print "```";
+                print files[f];
+                print "```\n";
+              }
+            }' ./scan-results/terraform/results.cli > scan-results/reports/file-issues.md
             
-            echo "* **Passed checks:** ${FULL_PASSED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "* **Failed checks:** ${FULL_FAILED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "* **Skipped checks:** ${FULL_SKIPPED_COUNT:-0}" >> ./scan-results/vulnerability-report.md
-            echo "" >> ./scan-results/vulnerability-report.md
-            
-            if [ "${FULL_FAILED_COUNT:-0}" -gt 0 ]; then
-              echo "### Failed Checks (All IaC)" >> ./scan-results/vulnerability-report.md
-              echo "See detailed scan results for more information." >> ./scan-results/vulnerability-report.md
+            # Check if any issues were found and add to main report
+            if [ -s scan-results/reports/file-issues.md ]; then
+              cat scan-results/reports/file-issues.md >> scan-results/reports/security-report.md
+            else
+              echo "No file-specific issues found." >> scan-results/reports/security-report.md
             fi
           else
-            echo "No comprehensive scan results available." >> ./scan-results/vulnerability-report.md
+            echo "No detailed scan results available." >> scan-results/reports/security-report.md
           fi
           
-          cat ./scan-results/vulnerability-report.md
+          # Create remediation advice section
+          cat >> scan-results/reports/security-report.md << 'EOL'
+          
+          ## Top Security Issues and Remediation Steps
+          
+          EOL
+          
+          # Extract top issues and add remediation guidance
+          if [ -f ./scan-results/terraform/results.cli ] && [ "$FAILED" -gt 0 ]; then
+            # Extract unique check IDs and descriptions
+            grep -A 1 "Check:" ./scan-results/terraform/results.cli | grep -v -- "--" | sort | uniq > scan-results/unique-checks.txt
+            
+            # Process each unique check and add remediation guidance
+            while read -r line; do
+              if [[ $line == *"Check:"* ]]; then
+                CHECK_ID=$(echo "$line" | sed -n 's/.*Check: \([^:]*\).*/\1/p')
+                CHECK_DESC=$(echo "$line" | sed -n 's/.*Check: [^:]*: "\(.*\)"/\1/p')
+                
+                echo "### $CHECK_ID: $CHECK_DESC" >> scan-results/reports/security-report.md
+                echo "" >> scan-results/reports/security-report.md
+                
+                # Add remediation guidance based on check ID
+                case "$CHECK_ID" in
+                  *"ENCRYPTION"*)
+                    echo "**Remediation:** Enable encryption for this resource. Use AWS KMS or similar service for key management." >> scan-results/reports/security-report.md
+                    ;;
+                  *"PUBLIC_ACCESS"*)
+                    echo "**Remediation:** Restrict public access by setting appropriate access controls and security groups." >> scan-results/reports/security-report.md
+                    ;;
+                  *"IAM"*)
+                    echo "**Remediation:** Review and tighten IAM permissions following the principle of least privilege." >> scan-results/reports/security-report.md
+                    ;;
+                  *"LOGGING"*)
+                    echo "**Remediation:** Enable logging and monitoring for this resource to improve security visibility." >> scan-results/reports/security-report.md
+                    ;;
+                  *)
+                    echo "**Remediation:** Review the resource configuration and apply security best practices." >> scan-results/reports/security-report.md
+                    ;;
+                esac
+                echo "" >> scan-results/reports/security-report.md
+              fi
+            done < scan-results/unique-checks.txt
+          else
+            echo "No security issues to remediate. Great job!" >> scan-results/reports/security-report.md
+          fi
+          
+          # Generate separate report for Pull Request comments
+          cat scan-results/reports/security-report.md | head -n 30 > scan-results/reports/pr-comment.md
+          echo "..." >> scan-results/reports/pr-comment.md
+          echo "**See full report in workflow artifacts**" >> scan-results/reports/pr-comment.md
+          
+          # Display summary
+          echo "Report generated successfully!"
+          cat scan-results/reports/security-report.md
       
-      # Step 9: Upload scan results as artifacts
+      # Step 9: Create HTML report for better visualization
+      - name: Generate HTML report
+        run: |
+          # Create a simple HTML version of the report
+          cat > scan-results/reports/security-report.html << 'EOL'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Terraform Security Scan Report</title>
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; color: #333; }
+              h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+              h2 { color: #2980b9; margin-top: 30px; }
+              h3 { color: #3498db; }
+              table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+              th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              th { background-color: #f2f2f2; }
+              tr:nth-child(even) { background-color: #f9f9f9; }
+              .high { background-color: #ffdddd; }
+              .medium { background-color: #ffffcc; }
+              .low { background-color: #e6f3ff; }
+              code { background-color: #f5f5f5; padding: 2px 5px; border-radius: 3px; font-family: monospace; }
+              pre { background-color: #f5f5f5; padding: 10px; border-radius: 5px; overflow-x: auto; }
+            </style>
+          </head>
+          <body>
+            <h1>Terraform Security Scan Report</h1>
+            <p>Scan completed at: $(date)</p>
+          EOL
+          
+          # Convert markdown to HTML (basic conversion)
+          sed -n '/^## Overview/,$p' scan-results/reports/security-report.md | sed 's/^## \(.*\)/<h2>\1<\/h2>/g' | \
+          sed 's/^### \(.*\)/<h3>\1<\/h3>/g' | \
+          sed 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g' | \
+          sed 's/^| \(.*\) |/<table><tr><th>\1<\/th><\/tr>/g' | \
+          sed 's/^|--------|/<tr><td>-----<\/td><\/tr>/g' | \
+          sed 's/^| \(.*\) |/<tr><td>\1<\/td><\/tr>/g' | \
+          sed 's/```/<pre>/g' | sed 's/```/<\/pre>/g' | \
+          sed 's/^$/<p><\/p>/g' >> scan-results/reports/security-report.html
+          
+          echo "</body></html>" >> scan-results/reports/security-report.html
+      
+      # Step 10: Upload scan results as artifacts
       - name: Upload scan results
         uses: actions/upload-artifact@v4
         with:
@@ -162,15 +314,35 @@ jobs:
           path: scan-results/
           retention-days: 14
       
-      # Step 10: Report findings but don't fail the pipeline
-      - name: Report security issues summary
+      # Step 11: Post summary comment on PR if this is a pull request
+      - name: Post summary comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const fs = require('fs');
+            const prComment = fs.readFileSync('scan-results/reports/pr-comment.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: prComment
+            });
+      
+      # Step 12: Set job status based on security issues
+      - name: Set job status
         run: |
-          if [ "${{ steps.run-terraform-scan.outputs.tf_scan_status }}" != "0" ]; then
-            echo "::warning::Security issues found in Terraform code! See scan results for details."
+          # Determine exit code based on severity of findings
+          if grep -q "\"severity\": \"HIGH\"" ./scan-results/terraform/results.json 2>/dev/null; then
+            echo "::warning::🔴 HIGH severity security issues found! See scan results for details."
+          elif grep -q "\"severity\": \"MEDIUM\"" ./scan-results/terraform/results.json 2>/dev/null; then
+            echo "::warning::🟠 MEDIUM severity security issues found! See scan results for details."
+          elif grep -q "\"severity\": \"LOW\"" ./scan-results/terraform/results.json 2>/dev/null; then
+            echo "::notice::🟡 LOW severity security issues found. See scan results for details."
+          else
+            echo "::notice::✅ No security issues found. Great job!"
           fi
           
-          if [ "${{ steps.run-comprehensive-scan.outputs.full_scan_status }}" != "0" ]; then
-            echo "::warning::Security issues found in IaC files! See scan results for details."
-          fi
-          
-          echo "All scan results have been uploaded as artifacts."
+          echo "Security scan complete! Reports uploaded as workflow artifacts."
