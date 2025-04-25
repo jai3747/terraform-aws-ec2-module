@@ -24,7 +24,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       
-      # Option 1: Run Checkov directly with Python
+      # Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -34,28 +34,30 @@ jobs:
         run: pip install checkov
       
       - name: Run Checkov scan
-        run: checkov --directory . --framework terraform --output cli --output sarif --output-file-path results.sarif
+        run: |
+          checkov --directory . --framework terraform --output cli --output sarif --output-file-path results.sarif
+          echo "Scan completed. Results saved to results.sarif"
       
-      # Upload results as artifacts for reviewing later
+      # Upload results as artifacts for reviewing later - using v2 which is compatible
       - name: Upload SARIF results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v2
         with:
           name: checkov-results
           path: results.sarif
       
-      # Option 2 (Alternative): Using Bridgecrew's Checkov GitHub Action
-      # - name: Run Checkov scan with GitHub Action
-      #   uses: bridgecrewio/checkov-action@master
-      #   with:
-      #     directory: .
-      #     framework: terraform
-      #     skip_check: CKV_AWS_1,CKV_AWS_2  # Optional: skip specific checks
-      #     quiet: true  # Optional: display only failed checks
-      #     soft_fail: true  # Optional: don't fail the build for errors
-      
-      # Optional: Publish results to GitHub Security tab
+      # Optional: Upload to GitHub Security tab
       - name: Upload SARIF file to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v1
         if: always()  # Run this step even if previous steps fail
         with:
           sarif_file: results.sarif
+          
+      # Fail the build if Checkov finds high severity issues (optional)
+      - name: Check for high severity issues
+        run: |
+          if grep -q '"severity": "HIGH"' results.sarif; then
+            echo "High severity security issues found in Terraform code!"
+            exit 1
+          else
+            echo "No high severity issues found."
+          fi
